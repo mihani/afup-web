@@ -69,7 +69,7 @@ test:
 	./bin/php-cs-fixer fix --dry-run -vv
 
 ### (Dans Docker) Tests fonctionnels
-behat:
+behat: tmp
 	./bin/behat
 
 ### Tests fonctionnels
