@@ -71,6 +71,7 @@ test:
 ### (Dans Docker) Tests fonctionnels
 behat: tmp
 	./bin/behat
+	$(MAKE) --no-directory remove-test-file
 
 ### Tests fonctionnels
 test-functional: data config htdocs/uploads tmp
@@ -79,6 +80,7 @@ test-functional: data config htdocs/uploads tmp
 	CURRENT_UID=$(CURRENT_UID) $(DOCKER_COMPOSE_BIN) run --no-deps --rm cliphp ./bin/behat
 	CURRENT_UID=$(CURRENT_UID) $(DOCKER_COMPOSE_BIN) run --no-deps --rm cliphp ./bin/behat -c behat-planete.yml
 	CURRENT_UID=$(CURRENT_UID) $(DOCKER_COMPOSE_BIN) stop dbtest apachephptest planetetest mailcatcher
+	$(MAKE) --no-directory remove-test-file
 
 ### Analyse PHPStan
 phpstan:
@@ -162,3 +164,7 @@ db-migrations:
 
 db-seed:
 	php bin/phinx seed:run
+
+remove-test-file:
+	rm htdocs/docs/forum-sponsoring*
+	rm htdocs/pages/administration/avatar1.png
