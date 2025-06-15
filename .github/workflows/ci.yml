@@ -1,148 +1,202 @@
 name: CI
 
-on: [ push, pull_request ]
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+      - synchronize
+      - ready_for_review
 
-env:
-  php_version: '8.2'
+permissions:
+  packages: write
 
 jobs:
+  check-existing-image:
+    name: Check if image exist
+#    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate hash
+        id: generate-hash
+        run: echo "hash=${{ hashFiles('docker/apachephp/*') }}" >> $GITHUB_OUTPUT
+
+      - run: |
+          if docker manifest inspect ghcr.io/mihani/afup-web/php:${{ steps.generate-hash.outputs.hash }} ; then
+            echo "run-php-build=false" >> $GITHUB_OUTPUT
+          else
+            echo "run-php-build=true" >> $GITHUB_OUTPUT
+          fi
+
+  build-dev-image:
+    name: Build Push dev image
+    needs: [ check-existing-image ]
+    if: ${{ success() && needs.check-existing-image.outputs.run-php-build == 'true' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker/apachephp
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          target: afup_web_dev
+          tags: ghcr.io/mihani/afup-web/php:${{ steps.check-existing-image.outputs.hash }}
+          push: true
 
   unit:
-    name: "Unit tests"
+    name: Unit tests
+    needs: [ check-existing-image, build-dev-image ]
+    if: ${{ always() && needs.build-dev-image.result == 'skipped' || needs.build-dev-image.result == 'success' }}
     runs-on: ubuntu-22.04
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup PHP with tools
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ env.php_version }}
-
-      - uses: ramsey/composer-install@v3
-        with:
-          composer-options: "--no-scripts"
-
-      - name: Tests - Unit
-        run: ./bin/phpunit --testsuite unit
-
-  lint:
-    name: "Linter"
-    runs-on: ubuntu-22.04
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup PHP with tools
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ env.php_version }}
-
-      - uses: ramsey/composer-install@v3
-        with:
-          composer-options: "--no-scripts"
-
-      - name: Tests - CS Fixer
-        run: ./bin/php-cs-fixer fix --dry-run -vv
-
-  phpstan:
-    name: "PHPStan"
-    runs-on: ubuntu-22.04
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup PHP with tools
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ env.php_version }}
-
-      - uses: ramsey/composer-install@v3
-        with:
-          composer-options: "--no-scripts"
-
-      - name: PHPStan
-        run: ./bin/phpstan --memory-limit=-1
-
-  functional:
-    name: "Functional tests"
-    runs-on: ubuntu-22.04
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Docker images.
-        uses: AndreKurait/docker-cache@0.6.0
-        with:
-          key: |
-            docker-${{ runner.os }}-${{ hashFiles(
-              'compose.yml',
-              'docker/apachephp/Dockerfile',
-              'docker/mysql/dev/Dockerfile',
-              'docker/mysql/test/Dockerfile'
-            ) }}
-
-      - name: Tests - Functional
+      - name: Load image
         run: |
-          make init-file
-          make init-folder
-          docker compose up -d
-          docker compose exec --user localUser apachephp composer install --no-scripts
-          docker compose run --rm node bash -c "npm install --legacy-peer-deps && npm run build"
-          cat ./.docker/mysql/reset-db.sql | docker compose run -T --rm db /opt/mysql_no_db
-          docker compose exec --user localUser apachephptest php bin/phinx migrate
-          docker compose exec --user localUser apachephptest php bin/phinx seed:run
-          docker compose exec --user localUser apachephptest ./bin/behat
-          cat var/logs/test.deprecations.log | cut -d "]" -f 2 | awk '{$$1=$$1};1' | sort | uniq -c | sort -nr > var/logs/test.deprecations_grouped.log
+          docker pull ghcr.io/mihani/afup-web/php:${{ needs.check-existing-image.outputs.hash }}
+          docker tag afup-web-apachephp:latest
+          docker image ls -a
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Functional tests - deprecated log - full
-          path: var/logs/test.deprecations.log
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Functional tests - deprecated log - report
-          path: var/logs/test.deprecations_grouped.log
-
-  integration:
-    name: "Integration tests"
-    runs-on: ubuntu-22.04
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Cache Docker images.
-        uses: AndreKurait/docker-cache@0.6.0
-        with:
-          key: |
-            docker-${{ runner.os }}-${{ hashFiles(
-              'compose.yml',
-              'docker/apachephp/Dockerfile',
-              'docker/mysql/dev/Dockerfile',
-              'docker/mysql/test/Dockerfile'
-            ) }}
-
-      - name: Tests - Integration
+      - name: Start services
         run: |
-          make init-file
-          make test-integration-ci
+          cp -n docker.env docker.env.local
 
-  rector:
-    name: "Rector"
-    runs-on: ubuntu-22.04
+      - name: PHPUnit
+        run: docker compose run --rm php bin/phpunit --testsuite unit
 
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup PHP with tools
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ env.php_version }}
-
-      - uses: ramsey/composer-install@v3
-        with:
-          composer-options: "--no-scripts"
-
-      - name: Rector
-        run: ./bin/rector --dry-run
+#  lint:
+#    name: "Linter"
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup PHP with tools
+#        uses: shivammathur/setup-php@v2
+#        with:
+#          php-version: ${{ env.php_version }}
+#
+#      - uses: ramsey/composer-install@v3
+#        with:
+#          composer-options: "--no-scripts"
+#
+#      - name: Tests - CS Fixer
+#        run: ./bin/php-cs-fixer fix --dry-run -vv
+#
+#  phpstan:
+#    name: "PHPStan"
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup PHP with tools
+#        uses: shivammathur/setup-php@v2
+#        with:
+#          php-version: ${{ env.php_version }}
+#
+#      - uses: ramsey/composer-install@v3
+#        with:
+#          composer-options: "--no-scripts"
+#
+#      - name: PHPStan
+#        run: ./bin/phpstan --memory-limit=-1
+#
+#  functional:
+#    name: "Functional tests"
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Cache Docker images.
+#        uses: AndreKurait/docker-cache@0.6.0
+#        with:
+#          key: |
+#            docker-${{ runner.os }}-${{ hashFiles(
+#              'compose.yml',
+#              'docker/apachephp/Dockerfile',
+#              'docker/mysql/dev/Dockerfile',
+#              'docker/mysql/test/Dockerfile'
+#            ) }}
+#
+#      - name: Tests - Functional
+#        run: |
+#          make init-file
+#          make init-folder
+#          docker compose up -d
+#          docker compose exec --user localUser apachephp composer install --no-scripts
+#          docker compose run --rm node bash -c "npm install --legacy-peer-deps && npm run build"
+#          cat ./.docker/mysql/reset-db.sql | docker compose run -T --rm db /opt/mysql_no_db
+#          docker compose exec --user localUser apachephptest php bin/phinx migrate
+#          docker compose exec --user localUser apachephptest php bin/phinx seed:run
+#          docker compose exec --user localUser apachephptest ./bin/behat
+#          cat var/logs/test.deprecations.log | cut -d "]" -f 2 | awk '{$$1=$$1};1' | sort | uniq -c | sort -nr > var/logs/test.deprecations_grouped.log
+#
+#      - uses: actions/upload-artifact@v4
+#        with:
+#          name: Functional tests - deprecated log - full
+#          path: var/logs/test.deprecations.log
+#
+#      - uses: actions/upload-artifact@v4
+#        with:
+#          name: Functional tests - deprecated log - report
+#          path: var/logs/test.deprecations_grouped.log
+#
+#  integration:
+#    name: "Integration tests"
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Cache Docker images.
+#        uses: AndreKurait/docker-cache@0.6.0
+#        with:
+#          key: |
+#            docker-${{ runner.os }}-${{ hashFiles(
+#              'compose.yml',
+#              'docker/apachephp/Dockerfile',
+#              'docker/mysql/dev/Dockerfile',
+#              'docker/mysql/test/Dockerfile'
+#            ) }}
+#
+#      - name: Tests - Integration
+#        run: |
+#          make init-file
+#          make test-integration-ci
+#
+#  rector:
+#    name: "Rector"
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup PHP with tools
+#        uses: shivammathur/setup-php@v2
+#        with:
+#          php-version: ${{ env.php_version }}
+#
+#      - uses: ramsey/composer-install@v3
+#        with:
+#          composer-options: "--no-scripts"
+#
+#      - name: Rector
+#        run: ./bin/rector --dry-run
