@@ -23,7 +23,7 @@
     "style-loader": "^0.23",
     "tablefilter": "^0.5",
     "tarteaucitronjs": "^1.19",
-    "webpack": "^3.6"
+    "webpack": "^5.101"
   },
   "scripts": {
     "build": "./node_modules/.bin/webpack -p",
