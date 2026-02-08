@@ -11,37 +11,12 @@ DOCKER_COMP = CURRENT_UID=$(CURRENT_UID) $(DOCKER_COMPOSE_BIN)
 PHP_CONT    = $(DOCKER_COMP) exec apachephp
 PHP         = $(PHP_CONT) php
 
-# Colors
-COLOR_RESET = \033[0m
-COLOR_TARGET = \033[32m
-COLOR_TITLE = \033[33m
-TEXT_BOLD = \033[1m
-
-.PHONY: help
-.SILENT: help
-help:
-	printf "\n${COLOR_TITLE}Usage:${COLOR_RESET}\n"
-	printf "  ${COLOR_TARGET}make${COLOR_RESET} [target]\n"
-	printf "\n"
-	awk '/^[\w\.@%-]+:/i { \
-		helpMessage = match(lastLine, /^### (.*)/); \
-		if (helpMessage) { \
-			helpCommand = substr($$1, 0, index($$1, ":") - 1); \
-			helpMessage = substr(lastLine, RSTART + 3, RLENGTH); \
-			printf "  ${COLOR_TARGET}%-30s${COLOR_RESET} %s\n", helpCommand, helpMessage; \
-		} \
-	} \
-	/^##@.+/ { \
-		printf "\n${TEXT_BOLD}${COLOR_TITLE}%s${COLOR_RESET}\n", substr($$0, 5); \
-	} \
-	{ lastLine = $$0 }' $(MAKEFILE_LIST)
-
-.PHONY: install docker-up docker-stop docker-down test hooks vendors db-seed db-migrations reset-db init console phpstan assets
-
 ##@ Setup
 
 ### Installer les dépendences (composer, npm)
-install: vendors
+install:
+	$(MAKE) --no-print-directory docker-up
+	$(MAKE) --no-print-directory init
 
 ### Initialisation générale (config, bdd)
 init: htdocs/uploads
@@ -160,8 +135,6 @@ var/logs/.docker-build: compose.yml compose.override.yml $(shell find docker -ty
 compose.override.yml:
 	cp compose.override.yml-dist compose.override.yml
 
-vendors: vendor node_modules
-
 vendor: composer.lock
 	composer install --no-scripts
 
@@ -174,7 +147,8 @@ init-db:
 	$(DOCKER_COMP) run --rm -u localUser apachephp make db-seed
 
 config:
-	$(DOCKER_COMP) run --no-deps --rm -u localUser apachephp make vendors
+	$(DOCKER_COMP) run --no-deps --rm -u localUser apachephp make vendor
+	$(DOCKER_COMP) run --no-deps --rm -u localUser apachephp make node_modules
 	$(DOCKER_COMP) run --no-deps --rm -u localUser apachephp make assets
 
 data:
@@ -205,3 +179,30 @@ var/logs/test.deprecations_grouped.log:
 
 var/cache/dev/AppKernelDevDebugContainer.xml:
 	php bin/console cache:warmup --env=dev
+
+# Colors
+COLOR_RESET = \033[0m
+COLOR_TARGET = \033[32m
+COLOR_TITLE = \033[33m
+TEXT_BOLD = \033[1m
+
+.PHONY: help
+.SILENT: help
+help:
+	printf "\n${COLOR_TITLE}Usage:${COLOR_RESET}\n"
+	printf "  ${COLOR_TARGET}make${COLOR_RESET} [target]\n"
+	printf "\n"
+	awk '/^[\w\.@%-]+:/i { \
+		helpMessage = match(lastLine, /^### (.*)/); \
+		if (helpMessage) { \
+			helpCommand = substr($$1, 0, index($$1, ":") - 1); \
+			helpMessage = substr(lastLine, RSTART + 3, RLENGTH); \
+			printf "  ${COLOR_TARGET}%-30s${COLOR_RESET} %s\n", helpCommand, helpMessage; \
+		} \
+	} \
+	/^##@.+/ { \
+		printf "\n${TEXT_BOLD}${COLOR_TITLE}%s${COLOR_RESET}\n", substr($$0, 5); \
+	} \
+	{ lastLine = $$0 }' $(MAKEFILE_LIST)
+
+.PHONY: install docker-up docker-stop docker-down test hooks db-seed db-migrations reset-db init console phpstan assets
